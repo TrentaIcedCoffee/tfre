@@ -32,7 +32,7 @@ class PositionEmbedding(tf.keras.layers.Layer):
     return x
 
 
-class GlobalSelfAttention(tf.keras.layers.Layer):
+class MHA(tf.keras.layers.Layer):
 
   def __init__(self, *, num_heads, key_dim, dropout):
     super().__init__()
@@ -40,6 +40,9 @@ class GlobalSelfAttention(tf.keras.layers.Layer):
                                                   key_dim=key_dim,
                                                   dropout=dropout)
     self.layer_norm = tf.keras.layers.LayerNormalization(epsilon=1e-7)
+
+
+class GlobalSelfAttention(MHA):
 
   def call(self, x):
     x = x + self.mha(query=x, value=x, key=x)
@@ -47,14 +50,7 @@ class GlobalSelfAttention(tf.keras.layers.Layer):
     return x
 
 
-class CrossAttention(tf.keras.layers.Layer):
-
-  def __init__(self, *, num_heads, key_dim, dropout):
-    super().__init__()
-    self.mha = tf.keras.layers.MultiHeadAttention(num_heads=num_heads,
-                                                  key_dim=key_dim,
-                                                  dropout=dropout)
-    self.layer_norm = tf.keras.layers.LayerNormalization(epsilon=1e-7)
+class CrossAttention(MHA):
 
   def call(self, x, context):
     x = x + self.mha(query=x, key=context, value=context)
@@ -62,14 +58,7 @@ class CrossAttention(tf.keras.layers.Layer):
     return x
 
 
-class CausalSelfAttention(tf.keras.layers.Layer):
-
-  def __init__(self, *, num_heads, key_dim, dropout):
-    super().__init__()
-    self.mha = tf.keras.layers.MultiHeadAttention(num_heads=num_heads,
-                                                  key_dim=key_dim,
-                                                  dropout=dropout)
-    self.layer_norm = tf.keras.layers.LayerNormalization(epsilon=1e-7)
+class CausalSelfAttention(MHA):
 
   def call(self, x):
     x = x + self.mha(query=x, value=x, key=x, use_causal_mask=True)
