@@ -26,6 +26,29 @@ def masked_loss(label, pred):
   return tf.reduce_sum(loss) / tf.reduce_sum(tf.cast(mask, tf.float32))
 
 
+# TODO: Unit test.
+def masked_loss_ignoring_context(separator_token):
+
+  def masked_loss(label, pred):
+    loss_obj = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True,
+                                                             reduction='none')
+    loss = loss_obj(label, pred)
+
+    mask = tf.math.cumsum(
+        tf.math.cumsum(
+            tf.cast(label == separator_token, dtype=tf.int32),
+            axis=-1,
+        ),
+        axis=-1,
+    ) > 1
+    mask &= label != 0
+    loss *= tf.cast(mask, loss.dtype)
+
+    return tf.reduce_sum(loss) / tf.reduce_sum(tf.cast(mask, tf.float32))
+
+  return masked_loss
+
+
 def masked_accuracy(label, pred):
   pred = tf.argmax(pred, axis=-1)
   label = tf.cast(label, pred.dtype)
@@ -35,3 +58,25 @@ def masked_accuracy(label, pred):
 
   return tf.reduce_sum(tf.cast(match, tf.float32)) / tf.reduce_sum(
       tf.cast(mask, tf.float32))
+
+
+def masked_accuracy_ignoring_context(separator_token):
+
+  def masked_accuracy(label, pred):
+    pred = tf.argmax(pred, axis=-1)
+    label = tf.cast(label, pred.dtype)
+
+    mask = tf.math.cumsum(
+        tf.math.cumsum(
+            tf.cast(label == separator_token, dtype=tf.int32),
+            axis=-1,
+        ),
+        axis=-1,
+    ) > 1
+    mask &= label != 0
+    match = (pred == label) & mask
+
+    return tf.reduce_sum(tf.cast(match, tf.float32)) / tf.reduce_sum(
+        tf.cast(mask, tf.float32))
+
+  return masked_accuracy

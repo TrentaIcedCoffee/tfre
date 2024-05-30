@@ -131,6 +131,24 @@ class Decoder(tf.keras.layers.Layer):
     return x
 
 
+def make_decoder_only(*, num_layers, d_model, num_heads, dff, vocab_size,
+                      max_tokens, dropout):
+  return tf.keras.Sequential([
+      PositionEmbedding(vocab_size=vocab_size,
+                        max_tokens=max_tokens,
+                        d_model=d_model),
+      tf.keras.layers.Dropout(dropout),
+      *[
+          tf.keras.Sequential([
+              CausalSelfAttention(
+                  num_heads=num_heads, key_dim=d_model, dropout=dropout),
+              FeedForward(d_model=d_model, dff=dff, dropout=dropout),
+          ]) for _ in range(num_layers)
+      ],
+      tf.keras.layers.Dense(vocab_size),
+  ])
+
+
 class Transformer(tf.keras.Model):
 
   def __init__(self, *, num_layers, d_model, num_heads, dff, encoder_vocab_size,
