@@ -258,3 +258,19 @@ class Transformer(tf.keras.Model):
   def call(self, x):
     context, x = x
     return self.final_linear_layer(self.decoder(x, self.encoder(context)))
+
+
+class RNN(tf.keras.layers.Layer):
+
+  def __init__(self, *, length, d_model):
+    super().__init__()
+    self.d_model = d_model
+    self.length = length
+    self.w_x = tf.keras.layers.Dense(d_model, use_bias=False)
+    self.w_h = tf.keras.layers.Dense(d_model, use_bias=False)
+
+  def call(self, x):
+    output = [tf.random.normal((x.shape[0], self.d_model))]
+    for i in range(self.length):
+      output.append(tf.nn.tanh(self.w_x(x[:, i, :]) + self.w_h(output[-1])))
+    return tf.stack(output[1:], axis=1)
