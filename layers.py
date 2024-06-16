@@ -274,3 +274,33 @@ class RNN(tf.keras.layers.Layer):
     for i in range(self.length):
       output.append(tf.nn.tanh(self.w_x(x[:, i, :]) + self.w_h(output[-1])))
     return tf.stack(output[1:], axis=1)
+
+
+class LSTM(tf.keras.layers.Layer):
+
+  def __init__(self, *, length, d_model):
+    super().__init__()
+    self.length = length
+    self.d_model = d_model
+    self.kernel = tf.keras.layers.Dense(d_model * 3, use_bias=False)
+    self.recurrent_kernel = tf.keras.layers.Dense(d_model * 3, use_bias=False)
+
+  def call(self, x):
+    '''A slight variation of LSTM. 
+      - Drops the input gate.
+      - Highlights that prediction is based on the long-term memory, selected by output gate.
+    '''
+    long_term_memory = tf.random.normal((x.shape[0], self.d_model))
+    output_sequence = [tf.random.normal((x.shape[0], self.d_model))]
+    for i in range(self.length):
+      forget, output, cell = tf.split(
+          self.kernel(x[:, i, :]) + self.recurrent_kernel(output_sequence[-1]),
+          3,
+          axis=-1,
+      )
+
+      long_term_memory = long_term_memory * tf.sigmoid(forget) + (
+          1 - tf.sigmoid(forget)) * tf.tanh(cell)
+      output_sequence.append(tf.sigmoid(output) * tf.tanh(long_term_memory))
+
+    return tf.stack(output_sequence[1:], axis=1)

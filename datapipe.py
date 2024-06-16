@@ -2,6 +2,48 @@ from typing import Iterable, Callable
 import tensorflow as tf
 
 
+def build_char_tokenizer(
+    chars: Iterable[str]) -> tuple[Callable, Callable, int]:
+  vocab = sorted(list(set(chars)))
+  vocab = ['[PAD]', '[UNK]', '[START]', '[END]'] + vocab
+
+  idx_to_word = tf.lookup.StaticHashTable(
+      tf.lookup.KeyValueTensorInitializer(
+          keys=range(len(vocab)),
+          values=vocab,
+      ),
+      default_value='[UNK]',
+  )
+  word_to_idx = tf.lookup.StaticHashTable(
+      tf.lookup.KeyValueTensorInitializer(
+          keys=vocab,
+          values=range(len(vocab)),
+      ),
+      default_value=1,
+  )
+
+  def tokenize_batch(inputs):
+    return tf.map_fn(
+        lambda s: word_to_idx.lookup(
+            tf.concat([
+                ['[START]'],
+                s,
+                ['[END]'],
+            ], axis=0)),
+        inputs,
+        fn_output_signature=tf.RaggedTensorSpec(shape=[None], dtype=tf.int32),
+    )
+
+  def detokenize_batch(inputs):
+    return tf.map_fn(
+        lambda idxs: idx_to_word.lookup(tf.boolean_mask(idxs, idxs >= 4)),
+        inputs,
+        fn_output_signature=tf.TensorSpec(shape=[None], dtype=tf.string),
+    )
+
+  return tokenize_batch, detokenize_batch, len(vocab)
+
+
 def build_simple_tokenizers(examples: Iterable[str],
                             separator=' ') -> tuple[Callable, Callable, int]:
   """Builds tokenizers for a given set of examples.
