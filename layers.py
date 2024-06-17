@@ -304,3 +304,61 @@ class LSTM(tf.keras.layers.Layer):
       output_sequence.append(tf.sigmoid(output) * tf.tanh(long_term_memory))
 
     return tf.stack(output_sequence[1:], axis=1)
+
+
+class GRU(tf.keras.layers.Layer):
+
+  def __init__(self, *, length, d_model):
+    super().__init__()
+    self.length = length
+    self.d_model = d_model
+    self.reset_gate = tf.keras.layers.Dense(d_model, use_bias=False)
+    self.update_gate = tf.keras.layers.Dense(d_model, use_bias=False)
+    self.candidate = tf.keras.layers.Dense(d_model, use_bias=False)
+
+  def call(self, x):
+    '''A slight variation of GRU that concats the input to the hidden state for simplicity.'''
+    hidden_states = [tf.zeros((x.shape[0], self.d_model))]
+    for i in range(self.length):
+      x_i = tf.concat([x[:, i, :], hidden_states[-1]], axis=-1)
+      reset = tf.sigmoid(self.reset_gate(x_i))
+      update = tf.sigmoid(self.update_gate(x_i))
+      candidate = tf.tanh(
+          self.candidate(
+              tf.concat([x[:, i, :], reset * hidden_states[-1]], axis=-1)))
+      hidden = update * hidden_states[-1] + (1 - update) * candidate
+      hidden_states.append(hidden)
+    return tf.stack(hidden_states[1:], axis=1)
+
+
+class MRU(tf.keras.layers.Layer):
+
+  class RU(tf.keras.layers.Layer):
+
+    def __init__(self, *, length, d_model):
+      super().__init__()
+      self.length = length
+      self.d_model = d_model
+      self.forget_gate = tf.keras.layers.Dense(d_model, use_bias=False)
+      self.candidate_gate = tf.keras.layers.Dense(d_model, use_bias=False)
+
+    def call(self, x):
+      hidden_states = [tf.zeros((x.shape[0], self.d_model))]
+      for i in range(self.length):
+        x_i = tf.concat([x[:, i, :], hidden_states[-1]], axis=-1)
+        forget = tf.sigmoid(self.forget_gate(x_i))
+        new_info = tf.tanh(self.candidate_gate(x_i))
+        hidden_states.append(forget * hidden_states[-1] +
+                             (1 - forget) * new_info)
+      return tf.stack(hidden_states[1:], axis=1)
+
+  def __init__(self, *, length, d_model, num_heads):
+    super().__init__()
+    self.rus = [
+        self.RU(length=length, d_model=d_model) for _ in range(num_heads)
+    ]
+    self.linear = tf.keras.layers.Dense(d_model)
+
+  def call(self, x):
+    x = tf.concat([ru(x) for ru in self.rus], axis=-1)
+    return self.linear(x)
