@@ -85,19 +85,145 @@ class MHA(tf.keras.layers.Layer):
     return self.dense(attn_out)
 
 
+class MMHA(tf.keras.layers.Layer):
+
+  def __init__(self,
+               *,
+               segment_size,
+               num_heads,
+               d_model,
+               use_causal_mask=False,
+               dropout=None):
+    super(MMHA, self).__init__()
+    self.num_heads = num_heads
+    self.d_model = d_model
+    self.use_causal_mask = use_causal_mask
+    self.query = tf.keras.layers.Dense(num_heads * d_model, use_bias=False)
+    self.key = tf.keras.layers.Dense(num_heads * d_model, use_bias=False)
+    self.value = tf.keras.layers.Dense(num_heads * d_model, use_bias=False)
+    self.dropout = tf.keras.layers.Dropout(dropout) if dropout else None
+    self.dense = tf.keras.layers.Dense(d_model, use_bias=False)
+
+    # Infini-Transformer.
+    self.segment_size = segment_size
+    self.beta = self.add_weight(
+        'beta',
+        shape=(num_heads),
+        initializer='zeros',
+        trainable=True,
+    )
+
+  def make_mask(self, length):
+    ''' Causal mask.
+    E.g.
+      [[[[ True, False, False],
+         [ True,  True, False],
+         [ True,  True,  True]]]]
+    '''
+    i = tf.range(length)[:, tf.newaxis]
+    j = tf.range(length)
+    return tf.reshape(tf.cast(i >= j, dtype=tf.bool), (1, 1, length, length))
+
+  def elu_1(self, x):
+    return tf.nn.elu(x) + 1
+
+  def call(self, x, training=None):
+    batch_size, length = tf.shape(x)[0], tf.shape(x)[1]
+
+    def step(x_start, x_segment, memory, z, out):
+      q, k, v = self.query(x_segment), self.key(x_segment), self.value(
+          x_segment)
+
+      q = tf.reshape(q, (batch_size, -1, self.num_heads, self.d_model))
+      q = tf.transpose(q, perm=[0, 2, 1, 3])
+      k = tf.reshape(k, (batch_size, -1, self.num_heads, self.d_model))
+      k = tf.transpose(k, perm=[0, 2, 1, 3])
+      v = tf.reshape(v, (batch_size, -1, self.num_heads, self.d_model))
+      v = tf.transpose(v, perm=[0, 2, 1, 3])
+      # qkv are in (batch_size, num_heads, segment_size, d_model).
+
+      attn_score = q @ tf.transpose(k, perm=[0, 1, 3, 2]) / tf.math.sqrt(
+          tf.cast(self.d_model, tf.float32)
+      )  # (batch_size, num_heads, segment_size, segment_size)
+      attn_score += -1e9 * tf.cast(~self.make_mask(tf.shape(x_segment)[1]),
+                                   attn_score.dtype)
+      attn_weight = tf.nn.softmax(attn_score, axis=-1)
+      if self.dropout:
+        attn_weight = self.dropout(attn_weight, training=training)
+      attn_out = attn_weight @ v  # (batch_size, num_heads, segment_size, d_model)
+      attn_out = tf.transpose(
+          attn_out, perm=[0, 2, 1,
+                          3])  # (batch_size, segment_size, num_heads, d_model)
+
+      # Memory retrieval.
+      q = tf.transpose(
+          q, [0, 2, 1, 3])  # (batch_size, segment_size, num_heads, d_model)
+      q = tf.reshape(q, (batch_size, -1, self.num_heads * self.d_model))
+      memory_retrived = self.elu_1(q) @ memory / (self.elu_1(q) @ z)
+      memory_retrived = tf.reshape(
+          memory_retrived,
+          (batch_size, -1, self.num_heads,
+           self.d_model))  # (batch_size, segment_size, num_heads, d_model)
+
+      step_out = tf.nn.sigmoid(self.beta)[..., tf.newaxis] * memory_retrived + (
+          1 - tf.nn.sigmoid(self.beta))[..., tf.newaxis] * attn_out
+
+      # Memory update.
+      k = tf.transpose(k, [0, 2, 1, 3])
+      k = tf.reshape(k, (batch_size, -1, self.num_heads * self.d_model))
+      v = tf.transpose(v, [0, 2, 1, 3])
+      v = tf.reshape(v, (batch_size, -1, self.num_heads * self.d_model))
+      # kv are in (batch_size, segment_size, num_heads * d_model).
+      memory += tf.reduce_sum(
+          tf.transpose(self.elu_1(k), [0, 2, 1]) @ (v - self.elu_1(k) @ memory /
+                                                    (self.elu_1(k) @ z)),
+          axis=0)
+      z += tf.reduce_sum(tf.transpose(self.elu_1(k), [0, 2, 1]),
+                         axis=-1,
+                         keepdims=True)
+
+      return memory, z, tf.concat(
+          [
+              out[:, :x_start, ...],
+              step_out,
+              out[:, x_start + self.segment_size:, ...],
+          ],
+          axis=1,
+      ),
+
+    out = tf.zeros(shape=(batch_size, length, self.num_heads, self.d_model))
+    memory = tf.zeros(
+        (self.num_heads * self.d_model, self.num_heads * self.d_model))
+    z = tf.ones((batch_size, self.num_heads * self.d_model, 1)) / self.d_model
+    for i in range(0, length, self.segment_size):
+      x_segment = x[:, i:i + self.segment_size, :]
+      memory, z, out = step(i, x_segment, memory, z, out)
+
+    return self.dense(
+        tf.reshape(out, (batch_size, length, self.num_heads * self.d_model)))
+
+
 class ResidualNormedMHA(tf.keras.layers.Layer):
 
   def __init__(self,
                *,
+               segment_size,
                num_heads,
                d_model,
                use_causal_mask=False,
                dropout=None):
     super().__init__()
-    self.mha = MHA(num_heads=num_heads,
-                   d_model=d_model,
-                   use_causal_mask=use_causal_mask,
-                   dropout=dropout)
+    if segment_size:
+      self.mha = MMHA(segment_size=segment_size,
+                      num_heads=num_heads,
+                      d_model=d_model,
+                      use_causal_mask=use_causal_mask,
+                      dropout=dropout)
+    else:
+      self.mha = MHA(num_heads=num_heads,
+                     d_model=d_model,
+                     use_causal_mask=use_causal_mask,
+                     dropout=dropout)
     self.layer_norm = tf.keras.layers.LayerNormalization(epsilon=1e-7)
 
   def call(self, x):
@@ -205,8 +331,8 @@ class Decoder(tf.keras.layers.Layer):
     return x
 
 
-def make_decoder_only(*, num_layers, d_model, num_heads, dff, vocab_size,
-                      max_tokens, dropout):
+def make_decoder_only(*, segment_size, num_layers, d_model, num_heads, dff,
+                      vocab_size, max_tokens, dropout):
   return tf.keras.Sequential([
       PositionEmbedding(vocab_size=vocab_size,
                         max_tokens=max_tokens,
@@ -214,7 +340,8 @@ def make_decoder_only(*, num_layers, d_model, num_heads, dff, vocab_size,
       tf.keras.layers.Dropout(dropout),
       *[
           tf.keras.Sequential([
-              ResidualNormedMHA(num_heads=num_heads,
+              ResidualNormedMHA(segment_size=segment_size,
+                                num_heads=num_heads,
                                 d_model=d_model,
                                 use_causal_mask=True,
                                 dropout=dropout),
