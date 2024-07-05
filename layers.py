@@ -1,5 +1,6 @@
 import tensorflow as tf
 import numpy as np
+import dataclasses
 
 
 class PositionEmbedding(tf.keras.layers.Layer):
@@ -283,6 +284,36 @@ class FeedForward(tf.keras.layers.Layer):
     return x
 
 
+class MoE(tf.keras.layers.Layer):
+
+  def __init__(self, *, experts: list[tf.keras.layers.Layer], d_output, k):
+    super().__init__()
+    self.router = tf.keras.layers.Dense(len(experts), use_bias=False)
+    self.experts = experts
+    self.k = k
+    # TODO: d_output should be inferred from the experts.
+    self.d_output = d_output
+
+  def call(self, x):
+    router_logits = self.router(x)
+    weights, selected_experts = tf.math.top_k(router_logits, k=self.k)
+    weights = tf.nn.softmax(weights, axis=-1)
+
+    results = tf.zeros(shape=(tf.shape(x)[0], tf.shape(x)[1], self.d_output))
+    for i, expert in enumerate(self.experts):
+      pos = tf.where(selected_experts == i)
+      results = tf.tensor_scatter_nd_add(
+          results,
+          # T, 2
+          pos[:, :2],
+          # (T, 1) * (T, d_model) -> T, d_model
+          tf.gather_nd(weights, pos)[..., tf.newaxis] *
+          expert(tf.gather_nd(x, pos[:, :2])),
+      )
+
+    return results
+
+
 class DecoderLayer(tf.keras.layers.Layer):
 
   def __init__(self, *, d_model, num_heads, dff, dropout):
@@ -331,8 +362,25 @@ class Decoder(tf.keras.layers.Layer):
     return x
 
 
-def make_decoder_only(*, segment_size, num_layers, d_model, num_heads, dff,
-                      vocab_size, max_tokens, dropout):
+@dataclasses.dataclass
+class MoEFeature:
+  num_experts: int
+  k: int
+
+
+@dataclasses.dataclass
+class InfiniFeature:
+  segment_size: int
+
+
+@dataclasses.dataclass
+class Feature:
+  moe: MoEFeature | None = None
+  infini: InfiniFeature | None = None
+
+
+def make_decoder_only(*, num_layers, d_model, num_heads, dff, vocab_size,
+                      max_tokens, dropout, feature: Feature):
   return tf.keras.Sequential([
       PositionEmbedding(vocab_size=vocab_size,
                         max_tokens=max_tokens,
@@ -340,13 +388,23 @@ def make_decoder_only(*, segment_size, num_layers, d_model, num_heads, dff,
       tf.keras.layers.Dropout(dropout),
       *[
           tf.keras.Sequential([
-              ResidualNormedMHA(segment_size=segment_size,
+              ResidualNormedMHA(segment_size=feature.infini.segment_size
+                                if feature.infini else None,
                                 num_heads=num_heads,
                                 d_model=d_model,
                                 use_causal_mask=True,
                                 dropout=dropout),
-              FeedForward(d_model=d_model, dff=dff, dropout=dropout),
-          ]) for _ in range(num_layers)
+              MoE(
+                  experts=[
+                      FeedForward(d_model=d_model, dff=dff, dropout=dropout)
+                      for _ in range(feature.moe.num_experts)
+                  ],
+                  k=feature.moe.k,
+                  d_output=d_model,
+              ) if feature.moe else FeedForward(
+                  d_model=d_model, dff=dff, dropout=dropout),
+          ])
+          for _ in range(num_layers)
       ],
       tf.keras.layers.Dense(vocab_size),
   ])
