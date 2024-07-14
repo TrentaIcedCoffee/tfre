@@ -272,8 +272,8 @@ class FeedForward(tf.keras.layers.Layer):
   def __init__(self, *, d_model, dff, dropout):
     super().__init__()
     self.seq = tf.keras.Sequential([
-        tf.keras.layers.Dense(dff, activation='relu'),
-        tf.keras.layers.Dense(d_model),
+        tf.keras.layers.Dense(dff, use_bias=False, activation='relu'),
+        tf.keras.layers.Dense(d_model, use_bias=False),
         tf.keras.layers.Dropout(dropout)
     ])
     self.layer_norm = tf.keras.layers.LayerNormalization(epsilon=1e-7)
@@ -444,7 +444,8 @@ class Transformer(tf.keras.Model):
                            vocab_size=decoder_vocab_size,
                            dropout=dropout)
 
-    self.final_linear_layer = tf.keras.layers.Dense(decoder_vocab_size)
+    self.final_linear_layer = tf.keras.layers.Dense(decoder_vocab_size,
+                                                    use_bias=False)
 
   def call(self, x):
     context, x = x
@@ -548,7 +549,7 @@ class MRU(tf.keras.layers.Layer):
     self.rus = [
         self.RU(length=length, d_model=d_model) for _ in range(num_heads)
     ]
-    self.linear = tf.keras.layers.Dense(d_model)
+    self.linear = tf.keras.layers.Dense(d_model, use_bias=False)
 
   def call(self, x):
     x = tf.concat([ru(x) for ru in self.rus], axis=-1)
