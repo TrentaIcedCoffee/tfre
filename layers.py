@@ -5,11 +5,11 @@ import dataclasses
 
 class PositionEmbedding(tf.keras.layers.Layer):
 
-  def __init__(self, *, vocab_size, max_tokens, d_model):
+  def __init__(self, *, vocab_size, d_model):
     super().__init__()
     self.d_model = d_model
     self.embedding = tf.keras.layers.Embedding(vocab_size, d_model)
-    self.pos_encoding = self.generate_position_encoding(length=max_tokens,
+    self.pos_encoding = self.generate_position_encoding(length=1_000_000,
                                                         d_model=d_model)
 
   def generate_position_encoding(self, length, d_model):
@@ -339,11 +339,10 @@ class DecoderLayer(tf.keras.layers.Layer):
 class Decoder(tf.keras.layers.Layer):
 
   def __init__(self, *, num_layers, d_model, num_heads, dff, vocab_size,
-               max_tokens, dropout):
+               dropout):
     super().__init__()
 
     self.pos_embedding = PositionEmbedding(vocab_size=vocab_size,
-                                           max_tokens=max_tokens,
                                            d_model=d_model)
     self.dropout = tf.keras.layers.Dropout(dropout)
     self.layers = [
@@ -379,47 +378,55 @@ class Feature:
   infini: InfiniFeature | None = None
 
 
-def make_decoder_only(*, num_layers, d_model, num_heads, dff, vocab_size,
-                      max_tokens, dropout, feature: Feature):
-  return tf.keras.Sequential([
-      PositionEmbedding(vocab_size=vocab_size,
-                        max_tokens=max_tokens,
-                        d_model=d_model),
-      tf.keras.layers.Dropout(dropout),
-      *[
-          tf.keras.Sequential([
-              ResidualNormedMHA(segment_size=feature.infini.segment_size
-                                if feature.infini else None,
-                                num_heads=num_heads,
-                                d_model=d_model,
-                                use_causal_mask=True,
-                                dropout=dropout),
-              MoE(
-                  experts=[
-                      FeedForward(d_model=d_model, dff=dff, dropout=dropout)
-                      for _ in range(feature.moe.num_experts)
-                  ],
-                  k=feature.moe.k,
-                  d_output=d_model,
-              ) if feature.moe else FeedForward(
-                  d_model=d_model, dff=dff, dropout=dropout),
-          ])
-          for _ in range(num_layers)
-      ],
-      tf.keras.layers.Dense(vocab_size),
+@dataclasses.dataclass
+class HParam:
+  num_layers: int
+  d_model: int
+  num_heads: int
+  dff: int
+  dropout: float
+  feature: Feature
+
+
+def make_decoder_only(*, vocab_size: int, hparam: HParam):
+  decoder = tf.keras.Sequential([
+      PositionEmbedding(vocab_size=vocab_size, d_model=hparam.d_model),
+      tf.keras.layers.Dropout(hparam.dropout),
   ])
+  for _ in range(hparam.num_layers):
+    decoder.add(
+        ResidualNormedMHA(segment_size=hparam.feature.infini.segment_size
+                          if hparam.feature.infini else None,
+                          num_heads=hparam.num_heads,
+                          d_model=hparam.d_model,
+                          use_causal_mask=True,
+                          dropout=hparam.dropout))
+    decoder.add(
+        MoE(
+            experts=[
+                FeedForward(d_model=hparam.d_model,
+                            dff=hparam.dff,
+                            dropout=hparam.dropout)
+                for _ in range(hparam.feature.moe.num_experts)
+            ],
+            k=hparam.feature.moe.k,
+            d_output=hparam.d_model,
+        ) if hparam.feature.moe else FeedForward(
+            d_model=hparam.d_model, dff=hparam.dff, dropout=hparam.dropout))
+
+  decoder.add(tf.keras.layers.Dense(vocab_size, use_bias=False))
+
+  return decoder
 
 
 class Transformer(tf.keras.Model):
 
   def __init__(self, *, num_layers, d_model, num_heads, dff, encoder_vocab_size,
-               decoder_vocab_size, max_tokens, dropout):
+               decoder_vocab_size, dropout):
     super().__init__()
 
     self.encoder = tf.keras.Sequential([
-        PositionEmbedding(vocab_size=encoder_vocab_size,
-                          max_tokens=max_tokens,
-                          d_model=d_model),
+        PositionEmbedding(vocab_size=encoder_vocab_size, d_model=d_model),
         *[
             tf.keras.Sequential([
                 GlobalSelfAttention(
@@ -435,7 +442,6 @@ class Transformer(tf.keras.Model):
                            num_heads=num_heads,
                            dff=dff,
                            vocab_size=decoder_vocab_size,
-                           max_tokens=max_tokens,
                            dropout=dropout)
 
     self.final_linear_layer = tf.keras.layers.Dense(decoder_vocab_size)

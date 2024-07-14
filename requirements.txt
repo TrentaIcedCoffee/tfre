@@ -4,3 +4,4 @@ yapf==0.40.2
 ipykernel==6.29.4
 pandas==2.2.2
 matplotlib==3.9.0
+tiktoken==0.7.0
