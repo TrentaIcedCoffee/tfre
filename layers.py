@@ -385,7 +385,7 @@ class HParam:
   num_heads: int
   dff: int
   dropout: float
-  feature: Feature
+  feature: Feature = dataclasses.field(default_factory=Feature)
 
 
 def make_decoder_only(*, vocab_size: int, hparam: HParam):
