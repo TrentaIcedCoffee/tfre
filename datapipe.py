@@ -1,5 +1,42 @@
 from typing import Iterable, Callable
+from tiktoken_ext import openai_public
 import tensorflow as tf
+import tiktoken
+import threading
+
+_tokenizer_lock = threading.RLock()
+TOKENIZER = None
+
+
+def get_tokenizer(vocab_size: int) -> tiktoken.Encoding:
+  """Returns a smaller version of cl100k_base tokenizer of `vocab_size`."""
+  global TOKENIZER
+  if TOKENIZER:
+    return TOKENIZER
+
+  with _tokenizer_lock:
+    if TOKENIZER:
+      return TOKENIZER
+
+    config = openai_public.cl100k_base()
+    mergeable_ranks = {
+        token: rank
+        for token, rank in config['mergeable_ranks'].items()
+        if rank < vocab_size
+    }
+    config = {
+        **config,
+        'name': 'cl4k_base',
+        'mergeable_ranks': mergeable_ranks,
+        'special_tokens': {
+            '<|endoftext|>':
+                len(mergeable_ranks) +
+                1,  # I don't know why rank `len(mergeable_ranks)` is not used but following the same pattern.
+            '<|endofprompt|>': len(mergeable_ranks) + 2,
+        },
+    }
+    TOKENIZER = tiktoken.Encoding(**config)
+    return TOKENIZER
 
 
 def build_char_tokenizer(
