@@ -15,6 +15,9 @@ class CanonicalSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
     return tf.math.rsqrt(d_model) * tf.math.minimum(tf.math.rsqrt(step),
                                                     step * self.warmup**-1.5)
 
+  def get_config(self):
+    return {'d_model': self.d_model, 'warmup': self.warmup}
+
 
 def masked_loss(label, pred):
   loss_obj = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True,

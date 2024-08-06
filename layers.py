@@ -131,7 +131,8 @@ class MMHA(tf.keras.layers.Layer):
   def call(self, x, training=None):
     batch_size, length = tf.shape(x)[0], tf.shape(x)[1]
 
-    def step(x_start, x_segment, memory, z, out):
+    @tf.function
+    def step(x_segment, memory, z):
       q, k, v = self.query(x_segment), self.key(x_segment), self.value(
           x_segment)
 
@@ -183,22 +184,33 @@ class MMHA(tf.keras.layers.Layer):
                          axis=-1,
                          keepdims=True)
 
-      return memory, z, tf.concat(
-          [
-              out[:, :x_start, ...],
-              step_out,
-              out[:, x_start + self.segment_size:, ...],
-          ],
-          axis=1,
-      ),
+      return step_out, memory, z
 
-    out = tf.zeros(shape=(batch_size, length, self.num_heads, self.d_model))
+    segments = tf.cast(tf.math.ceil(length / self.segment_size), dtype=tf.int32)
+    outs = tf.TensorArray(dtype=tf.float32, size=segments)
     memory = tf.zeros(
         (self.num_heads * self.d_model, self.num_heads * self.d_model))
     z = tf.ones((batch_size, self.num_heads * self.d_model, 1)) / self.d_model
     for i in range(0, length, self.segment_size):
-      x_segment = x[:, i:i + self.segment_size, :]
-      memory, z, out = step(i, x_segment, memory, z, out)
+      step_out, memory, z = step(x[:, i:i + self.segment_size, :], memory, z)
+      step_length = tf.shape(step_out)[1]
+      if step_length < self.segment_size:
+        step_out = tf.pad(
+            step_out,
+            [[0, 0], [0, self.segment_size - step_length], [0, 0], [0, 0]])
+      outs = outs.write(i // self.segment_size, step_out)
+
+    @tf.function
+    def concat_segments(i, out, outs):
+      out = tf.concat([out, outs.read(i)], axis=1)
+      return i + 1, out, outs
+
+    _, out, _ = tf.while_loop(
+        lambda i, *_: i < segments,
+        concat_segments,
+        (1, outs.read(0), outs),
+    )
+    out = out[:, :length, :, :]
 
     return self.dense(
         tf.reshape(out, (batch_size, length, self.num_heads * self.d_model)))
