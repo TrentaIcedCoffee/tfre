@@ -6,3 +6,6 @@ pandas==2.2.2
 matplotlib==3.9.0
 tiktoken==0.7.0
 datasets==2.20.0
+
+# The following is needed to avoid a conflict btn tensorflow and typing_extensions. 
+typing_extensions==4.12.2

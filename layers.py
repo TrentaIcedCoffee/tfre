@@ -9,7 +9,8 @@ class PositionEmbedding(tf.keras.layers.Layer):
     super().__init__()
     self.d_model = d_model
     self.embedding = tf.keras.layers.Embedding(vocab_size, d_model)
-    self.pos_encoding = self.generate_position_encoding(length=1_000_000,
+    # TODO: Unsaveable. Generate it on the fly.
+    self.pos_encoding = self.generate_position_encoding(length=10_000,
                                                         d_model=d_model)
 
   def generate_position_encoding(self, length, d_model):
@@ -402,6 +403,7 @@ class HParam:
 
 def make_decoder_only(*, vocab_size: int, hparam: HParam):
   decoder = tf.keras.Sequential([
+      tf.keras.Input(shape=(None,), dtype=tf.int32),
       PositionEmbedding(vocab_size=vocab_size, d_model=hparam.d_model),
       tf.keras.layers.Dropout(hparam.dropout),
   ])
